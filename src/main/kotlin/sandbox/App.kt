@@ -1,12 +1,23 @@
 package sandbox
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
+import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.giladam.kafka.jacksonserde.Jackson2Serde
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.StreamsBuilder
 import org.apache.kafka.streams.StreamsConfig
 import org.apache.kafka.streams.TopologyTestDriver
+import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.test.ConsumerRecordFactory
 import java.util.*
+
+
+data class User(
+  val id: Long,
+  val lastName: String
+)
 
 class App {
   val greeting: String
@@ -22,21 +33,29 @@ class App {
     props[StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
     props[ConsumerConfig.AUTO_OFFSET_RESET_CONFIG] = "earliest"
 
+    val mapper = ObjectMapper()
+      .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+      .enable(SerializationFeature.INDENT_OUTPUT)
+      .registerModule(KotlinModule())
+    val userSerdes = Jackson2Serde(mapper, User::class.java)
+    val strSerializer = Serdes.String().serializer()
+    val strDeserializer = Serdes.String().deserializer()
+
     val builder = StreamsBuilder()
-    val source = builder.stream<String, String>("input-topic")
-    val filtered = source.filter { _, value -> value.startsWith("k") }
+    val usersStream = builder.stream<String, User>("users", Consumed.with(Serdes.String(), userSerdes))
+    val filtered = usersStream.filter { _, value -> value.lastName.startsWith("k") }
     filtered.to("output-topic")
 
     val topology = builder.build()
     val driver = TopologyTestDriver(topology, props)
 
-    val strSerializer = Serdes.String().serializer()
-    val strDeserializer = Serdes.String().deserializer()
     val factory = ConsumerRecordFactory(strSerializer, strSerializer)
-    driver.pipeInput(factory.create("input-topic", "key", "kalue"))
+    driver.pipeInput(factory.create("users", "key", mapper.writeValueAsString(User(1, "kid"))))
 
-    val record = driver.readOutput("output-topic", strDeserializer, strDeserializer)
+    val record = driver.readOutput("output-topic", strDeserializer, userSerdes.deserializer())
     println(record)
+
+    val users = builder.table("users", Consumed.with(Serdes.String(), userSerdes))
   }
 
 }
